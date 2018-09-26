@@ -26,6 +26,12 @@
 #define Pln    Serial.println
 #define BTln   Pln //mySerial.println
 
+const char compileDATE[] PROGMEM = __DATE__;
+const char compileTIME[] PROGMEM = __TIME__;
+// convert to formatted Strings
+const String VERSION_NUM = "1.0.0";    //
+const String COMPILE_DATE = String(compileDATE).replace(" ", "_"); // convert char array to a string type and eliminate spaces
+const String COMPILE_TIME = String(compileTIME);
 
 
 //#define SMALL_FONT u8g2.setFont(u8g2_font_6x12_mr);  // 7 pix
@@ -40,33 +46,32 @@
 U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C u8g2(U8G2_R0, 19, 18, 20); // Adafruit Feather ESP8266/32u4 Boards + FeatherWing OLED
 //U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0,  U8X8_PIN_NONE);  // Adafruit ESP8266/32u4/ARM Boards + FeatherWing OLED
 
-#define DAC_RESOLUTION  12
-const float twopi = 3.14159 * 2;
-// Peak scale values
-#define fourdBu    1.736
-#define zerodBV    1.414
-#define zerodBu    1.095
-#define oneVpk     1.000
-#define neg10dBV   0.447
 
-const bool PRINT_FLAG = 1;
 const int led_pin = LED_BUILTIN;      // pin for the LED
 // encoder connection A C B; common to gnd; A,B with pullups
 const byte pinA = 3;          // encoder pin, interrupt
 const byte pinB = 5;          // encoder pin, interrupt
 const byte pinC = 4;          // low = gnd for common
-const byte shaftBtn = 2;
-volatile int N = 0;
+const byte pin_shaft_btn = 2;
+
 volatile int k_prev = 0;
 volatile int k = 0;
-volatile int i = 0;
-int d;
-int encStep = 0;
-volatile int Q = 0;
-long t_enc = 0;  // keep track of time since last encoder pulse
+volatile int encStep = 0;
+volatile uint32_t t_enc = 0;  // keep track of time since last encoder pulse
+volatile int btn1;
+volatile int btn1_prev = 1;
+
+
+const byte DAC_RESOLUTION = 12;
+// Peak scale values
+const float fourdBu =   1.736;
+const float oneVpk =    1.000;
+const float neg10dBV =  0.447;
+// const float zerodBV =   1.414;
+// const float zerodBu =   1.095;
 
 const float out_ampl[3] = {neg10dBV, oneVpk,  fourdBu};
-const float v_ref = 3.297;
+const float v_ref = 3.301;  //3.297;
 float dac_scale = out_ampl[1]/v_ref;
 const float f = 100;                // Hz ************
 const int points = 100;              // for ~64 or less, add HW LPF ~ 1kHz
@@ -116,13 +121,12 @@ elapsedMillis since_print;
 elapsedMicros us_counter = 0;   // with tstep
 elapsedMillis since_btn;
 // todo: add btn read interval
+
+const bool PRINT_FLAG = 1;
 const int NUM_READINGS = 4;
-
 const uint16_t btn_interval =     15;       // ms
-      uint16_t sample_interval =  20;
+uint16_t sample_interval =  10;
 const uint16_t print_interval =  100;
-
-
 
 float v_hist_max[4][16] = {
     {0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0},
@@ -141,7 +145,7 @@ float v_hist_min[4][16] = {
 // ISR
 void updateDAC() {
     // pk-pk V, min at 0
-    wave =  dac_scale * 0.5*(sin(twopi*f*t) + 1.0);  // 0 to 1.0 * scaling factor
+    wave =  dac_scale * 0.5*(sin(TWO_PI * f * t) + 1.0);  // 0 to 1.0 * scaling factor
 
     // conver [0 - 1] to [0 - 4095]
     // val = 4095 * wave;
@@ -154,14 +158,14 @@ void updateDAC() {
 
 void setup(void) {
     pinMode(led_pin, OUTPUT);
-    pinMode(shaftBtn, INPUT_PULLUP);
+    pinMode(pin_shaft_btn, INPUT_PULLUP);
     pinMode(pinA, INPUT_PULLUP);
     pinMode(pinB, INPUT_PULLUP);
     pinMode(pinC, OUTPUT);
-    digitalWrite(pinC, 0);
+    digitalWriteFast(pinC, 0);
     attachInterrupt(pinA, updateEncoder, CHANGE);
     attachInterrupt(pinB, updateEncoder, CHANGE);
-    //  attachInterrupt(shaftBtn, updateEncoder, CHANGE);
+    //  attachInterrupt(pin_shaft_btn, updateEncoder, FALLING);
 
     analogReadResolution(ADC_BITS);
     analogWriteResolution(DAC_RESOLUTION);
@@ -171,13 +175,15 @@ void setup(void) {
 
     delay(1000);
     u8g2.clearBuffer();          // clear the internal memory
-    MED_FONT;;
+    MED_FONT;
     u8g2.drawStr((0 + 9) * char_width - 2, 1 * line_height - 2, "V"); //
-    u8g2.drawStr((0 + 9) * char_width - 4, 2 * line_height - 2, "HV"); //
+    u8g2.drawStr((0 + 9) * char_width - 3, 2 * line_height - 2, " HV"); //
 
     Serial.begin(115200); // rate doesn't matter for teensy routed to USB console
     while (!Serial && (millis() < 5000)) {} // include timeout if print console isn't opened
     Serial.println(" USB Serial Print initialized*");
+    Serial.println(COMPILE_DATE);
+    Serial.println(COMPILE_TIME);
     Serial.print("t_step_f [ms]  " + String(tstep_f*1000.0,4));
     Serial.print("  ");
     Serial.println(tstep);
@@ -189,7 +195,7 @@ void setup(void) {
     //u8g2.setFont(u8g2_font_profont22_mf);  // 14 pix
 
     u8g2.clearBuffer();          // clear the internal memory
-    MED_FONT;;
+    MED_FONT;
     u8g2.drawStr((0 + 9) * char_width - 2, 1 * line_height - 2, "V"); //
     u8g2.drawStr((0 + 9) * char_width - 4, 2 * line_height - 2, "HV"); //
     SMALL_FONT;
@@ -209,15 +215,13 @@ void setup(void) {
 void loop(void) {
     // create a reference sine wave on internal DAC output
     // use interrupt instead
-    static int btn1;
-    static int btn1_prev = 1;
 
     // mesaure two pairs on analog inputs
     int n_ch = 2;   // only using 2 of 4
     static int i_h = 0; // ring counter
 
     if (since_sample >= sample_interval) {
-       // sample_interval = random(4,11);
+        // sample_interval = random(4,11);
         since_sample -= sample_interval;
         // read voltage for each channel
 //     int x1 = analogRead(A0);
@@ -253,21 +257,7 @@ void loop(void) {
 
         if (since_btn >= btn_interval) {
             since_btn -= btn_interval;
-
-            // check new btn for output scale select
-            btn1 = digitalRead(shaftBtn);
-            if (btn1 == 0 && btn1_prev == 1) {        // if pressed, loop through options
-                digitalWrite(led_pin,1);
-                delay(20);
-                digitalWrite(led_pin,0);
-                delay(5);
-                dac_scale_index++;
-                if (dac_scale_index > 2) dac_scale_index = 0;
-                dac_scale = out_ampl[dac_scale_index]/v_ref;
-                printOLED();
-                if (PRINT_FLAG) printMONITOR();
-            }
-            btn1_prev = btn1;
+            updateEncoder();
         }
 
         if (since_print >= print_interval) {
@@ -281,23 +271,26 @@ void loop(void) {
 
 float getV(int ch_pair, int num_readings) {
     // read two ADC channels and find difference (Both channels must see a positive voltage)
+// *** the diff- pins are now direct to gnd
     int32_t k1 = 0;
     int32_t k2 = 0;
     int32_t k;    // intermediate
     int32_t k_max = 0;
     int32_t k_min = 1e6;
-    for (int i = 0; i < num_readings; i++) {
+    for (int i = 0; i < num_readings+1; i++) {
         k1 += 0; //analogRead(adc_pair[ch_pair][0]);
-        k2 += analogRead(adc_pair[ch_pair][1]);
-        delayMicroseconds(2);
+        k = analogRead(adc_pair[ch_pair][1]);
+        if (i > 0) k2 += k;    // ignore first one, as it tends to be off
+        delayMicroseconds(5);
     }
-    k1 /= num_readings;
+    // k1 /= num_readings;
     k2 /= num_readings;
+    Serial.println(k2); // temp
 
     if (k2 > (ADC_MAX_VAL - 2))
         overrange_flag = 1;
-    else if (k1 > (ADC_MAX_VAL - 2))
-        overrange_flag = -1;
+    // else if (k1 > (ADC_MAX_VAL - 2))
+    //     overrange_flag = -1;
     else
         overrange_flag = 0;
 
@@ -308,13 +301,13 @@ float getV(int ch_pair, int num_readings) {
 void printOLED() {
     byte num_dec = 2;
     // print to OLED display
-    dtostrf(v_pk_max[0], 6, num_dec, str);
+    dtostrf(v_pk_max[0], 6, num_dec, str);      // low voltage
     LARGE_FONT;
     u8g2.drawStr(0 * char_width, 1 * line_height - 1, str); //
 //    SMALL_FONT;
 //    u8g2.drawStr((0 + 10) * char_width, 1 * line_height - 2, "V sig"); //
 //
-    dtostrf(v_pk_max[1], 6, num_dec, str);
+    dtostrf(v_pk_max[1], 6, 1, str);      // high voltage
     LARGE_FONT;
     u8g2.drawStr(0 * char_width, 2 * line_height + 0, str); //
 //    SMALL_FONT;
@@ -335,41 +328,49 @@ void printMONITOR() {
 //    P(str1);
 //    sprintf(str1, "min    %7.3f V_sig    %6.2f HV [amp] \t%4.0fHz   %5.3f \n", v_pk_min[0], v_pk_min[1], f, out_ampl[dac_scale_index]);
 //    Pln(str1);
-    sprintf(str1, "dif    %7.3f V_sig    %6.2f HV [amp] \t%4.0fHz   %5.3f \n", v_pk_max[0]-v_pk_min[0], v_pk_max[1]-v_pk_min[1], f, out_ampl[dac_scale_index]);
+    sprintf(str1, "  %7.3f V_sig    %6.2f HV [amp] \t%4.0fHz   %5.3f \n", v_pk_max[0]-v_pk_min[0], v_pk_max[1]-v_pk_min[1], f, out_ampl[dac_scale_index]);
     P(str1);
 }
 
 
-// ---------------------------------------------------------------------------------
+// ISR pin_change ---------------------------------------------------------------------------------
 void updateEncoder() {
-    //TEMP set to 1 for mech enc
-    int div_N = 1;  // slow down data output rate; 8 gives enough resolution
-    bool    b = digitalRead(shaftBtn);
-    k = digitalRead(pinA);
-    d = digitalRead(pinB);
+    noInterrupts();
+    bool d;
+    int i;
+    k = digitalReadFast(pinA);
+    d = digitalReadFast(pinB);
     if (k_prev > k) { // rising edge
+        digitalWriteFast(led_pin,1);
         t_enc = millis();
         i = -1 * (-1 + 2 * d); // flip dir
-        N = N + i * !(Q % div_N);
-        Q++;
-        // modify to only print +1 or -1
-        if (i >= 0) P(" "); // align print with leading sp for pos
-        if (Q % div_N == 0) {
-            Pln(i); // P(" v ");   if (N >= 0) P(" "); P(N);
-            // P("\n");
-            //  BT(i);
-            //  BT("\n");
-        }
+        // do something with encoder value
+        delay(9);
+        digitalWriteFast(led_pin,0);
+        delay(5);
+
+        k_prev = k;
     }
-    // show interrupt occurring
-    noInterrupts();
-    digitalWrite(led_pin,1);
-    delay(20);
-    digitalWrite(led_pin,0);
-    delay(5);
+
+
+    // check btn for output scale select
+    btn1 = digitalReadFast(pin_shaft_btn);
+    if (btn1 < btn1_prev) {        // if pressed (falling), loop through options
+        digitalWriteFast(led_pin,1);
+        dac_scale_index++;
+        if (dac_scale_index > 2) dac_scale_index = 0;
+        dac_scale = out_ampl[dac_scale_index]/v_ref;
+        printOLED();
+        if (PRINT_FLAG) printMONITOR();
+        delay(15);
+        digitalWriteFast(led_pin,0);
+        delay(5);
+    }
+    btn1_prev = btn1;
     interrupts();
-    k_prev = k;
 }
+
+
 
 
 /// map one numerical span to another with floating point values
